@@ -37,6 +37,7 @@ Ubuntu 22.04.5 with the kernel 6.8.0-138-generic and the root file system on ZFS
 
 - NVIDIA driver 535.230.02: Ubuntu's `nvidia-driver-535` 535.230.02-0ubuntu0.22.04.1, with the NVIDIA packages on hold. Do not install the 575 driver that comes with the CUDA runfile.
 - gcc and g++ 11.4.0-1ubuntu1~22.04.3 (they built the engine), `git`, `curl` and `jq` (`check-deployment.sh` uses it).
+- The overlay network's client, joined to the overlay, so that `wt0` exists, and an access policy that lets the gateway reach TCP port 8000 of this VM ([decision 0008](../decisions/0008-gateway-through-a-forwarder-on-the-overlay.md)). Both are outside this repository. Not rehearsed.
 - setup.sh installs `python3-venv` and `python3-pip` with sudo when they are missing (`results/apt-history-20261016.txt`). The venv of `config/strata-venv.txt` was made with python3.10 3.10.12-1~22.04.18, python3-pip-whl 22.0.2+dfsg-1ubuntu0.7 and python3-setuptools-whl 59.6.0-1.2ubuntu0.22.04.3; another revision of either can change pip's or setuptools' line in that file.
 
 Not rehearsed. The versions are this machine's (`results/host-state-20261030.txt`).
@@ -157,6 +158,18 @@ cp config/strata-iq3_xxs.setup.json ~/dev/strata/strata-iq3_xxs.json
 
 Rehearsed (R10, same file): the result equals `config/strata-iq3_xxs.deployed.json` byte for byte.
 
+A config from a backup of the live one has `api_key`, so this step's `cmp` fails on it for that reason alone. Setup's config has no key: before going back to it, copy the value out of the backup.
+
+Then give the service its keys ([deployment record, section 5](../deployment-record.md#5-known-limits-to-share-with-lab-members)). They are in no file of this repository. Take them from the backup or the old machine's live config. If neither is left, make two new ones and change the gateway's copy of its key.
+```bash
+chmod 0600 ~/dev/strata/strata-iq3_xxs.json       # before the keys go in
+install -d -m 0700 ~/.config/strata
+install -m 0600 /dev/null ~/.config/strata/local-api-key
+```
+With an editor, set `"api_key"` in the live config to the gateway's key and the key for local use, separated by a comma, and put the key for local use in `~/.config/strata/local-api-key`.
+
+Not rehearsed. The keys and the mode came to the live config on 2026-11-08.
+
 ### 10. The venv
 
 ```bash
@@ -187,7 +200,7 @@ scripts/install-system-files.sh --enable
 ```
 It installs the units, the drop-in `user-1003.slice.d/50-memory.conf` (the account's 6 GiB), the logrotate rule and the watchdog, enables and starts `zfs-arc-max.service` (the ARC cap of 2 GiB) and enables `strata-q3` and its timer (`scripts/install-system-files.sh:25-37`).
 
-`--enable` leaves `strata-gateway-proxy.socket` alone: it refuses every address until this machine has the gateway's. Once the service works, [Let the gateway in](change-config.md#let-the-gateway-in) gives the steps, and `scripts/check-drift.sh` reports the missing drop-in until then.
+`--enable` leaves `strata-gateway-proxy.socket` alone: it refuses every address until this machine has the gateway's. Step 14 lets the gateway in. Until then `scripts/check-drift.sh` reports the missing drop-in, and `scripts/check-deployment.sh` a socket that is not active and enabled.
 
 Not rehearsed (sudo, `/etc`). The script, without `--enable`, installed `strata-q3.service` and `zfs-arc-max.service` on 2026-10-19 (`results/deploy-0.1.45-20261019.txt`); no record shows a run with `--enable`. Production's `check-drift.sh` of 2026-10-30 found the installed files as the repository's (`results/rebuild-rehearsal-r8-r11-20261030.txt`, after R11).
 
@@ -209,13 +222,15 @@ A restart is ready after about 9 minutes (550–556 s for IQ3_S: `results/ab3-iq
 
 Not rehearsed (GPUs). The start of 0.1.45 on 2026-10-19 is in `results/deploy-0.1.45-20261019.txt`, and a start with this repository's preflight and wait-ready of `7886a39`, on 2026-10-29, in `results/restart-after-confirm-20261029.txt`.
 
+Once the service answers, follow [Let the gateway in](change-config.md#let-the-gateway-in) before step 15. The gateway needs this VM's overlay address too, in its own configuration. Not rehearsed.
+
 ### 15. Verify
 
 ```bash
 nice -n 19 ionice -c3 scripts/check-drift.sh --full      # 11 min 24 s on 2026-10-27 (results/check-drift-full-20261027.txt)
 scripts/check-deployment.sh
 ```
-Expected: drift on the two engine binaries only, and `no problems found` from `check-deployment.sh`.
+Expected: drift on the two engine binaries only, and `no problems found` from `check-deployment.sh`. Both need the keys of step 9 and the gateway's steps of step 14.
 
 Then screen the rebuilt engine on the GPUs. The arm R1 of `bench/arms-rebuild.json` is the deployed configuration (K1 of `bench/arms-iq3s.json`) run from the rebuilt engine in `~/dev/strata-0.1.45`; the baseline is K1's four runs of 2026-10-29 with the deployed binary (`cf-k1-1` to `cf-k1-4`, [Engine experiments](../engine-experiments.md)). `bench/ab_engine.sh` stops the service before the first run and starts it again after the last. Each run takes about 26 minutes and the restart after the last about 9 more, so the service is down for about an hour (`results/ab_engine-confirm-20261029.log`: cf-k1-1 15:51:07–16:18:03, the restart 19:20:23–19:29:34). It refuses tags it has used before, so a second attempt needs new ones (`bench/ab_engine.sh:170-176`). This screen has not been run.
 ```bash

@@ -31,22 +31,24 @@ Chosen option: 1, because it needs no new port on any network, no change of the 
 
 - `systemd/strata-gateway-proxy.socket` listens on port 8000, bound to `wt0` (`BindToDevice=`), so only what arrives on the overlay's interface reaches it.
 - It refuses every address (`IPAddressDeny=any`) but the gateway's. That address is not in this public repository: it is in a drop-in that only this machine has, `/etc/systemd/system/strata-gateway-proxy.socket.d/10-gateway-address.conf`. [Let the gateway in](../runbooks/change-config.md#let-the-gateway-in) gives the steps.
-- `systemd/strata-gateway-proxy.service` runs `systemd-socket-proxyd`, which comes with systemd, as a dynamic user that can reach loopback only. It allows 32 connections at a time, well above what the gateway opens, because past the limit it resets a connection instead of queueing it, and a peer that vanishes with the overlay is found within 2 minutes (TCP keepalive), because the proxy has no timeouts of its own.
+- `systemd/strata-gateway-proxy.service` runs `systemd-socket-proxyd`, which comes with systemd, as a dynamic user that can reach loopback only. It allows 32 connections at a time, well above what the gateway opens, because past the limit it resets a connection instead of queueing it. It has no timeouts of its own, so the socket sets TCP keepalive: a silent peer that vanishes with the overlay is found within 2 minutes.
 - The service has an API key now, one for the gateway and one for local use, in `"api_key"` of the live config. They are in no file of this repository.
 
 ### Consequences
 
 - Good, because nothing listens on the machine's own network, and nothing is installed.
 - Good, because three checks stand between a client and the service: the overlay's access policy, the socket's device and address list, and the API key.
-- Good, because `strata-q3.service` does not change and does not restart. `sudo systemctl stop strata-gateway-proxy.socket` cuts the gateway off and leaves the service running.
+- Good, because `strata-q3.service` does not change and does not restart. `sudo systemctl disable --now strata-gateway-proxy.socket` cuts the gateway off and leaves the service running. `stop` alone lasts only until the overlay's client restarts: `WantedBy=` starts the socket again with `wt0`.
 - Bad, because the gateway's address is not in the repository: a rebuilt machine needs the drop-in by hand. Until then the socket refuses every address, and `scripts/check-drift.sh` reports the missing drop-in.
 - Bad, because a client on this machine must now send a key: without one, `/v1/*` answers 401.
 - Bad, because the port and the interface's name come from the overlay: a change of the access policy or of the interface's name means a change of the socket unit.
 - Bad, because a restart of the overlay's client ends the connections through the forwarder: the socket stops with `wt0` and starts again with it.
+- Bad, because a gateway that vanishes during a stream is not found within those 2 minutes. Data that waits for an acknowledgement keeps keepalive from running, so the request holds its slot of the service until generation ends or TCP's retransmission gives up. On a test VM on 2026-11-08 (systemd 249, kernel 6.8; not in `results/`), such a connection was still established after 436 s, when the test stopped. How long TCP takes to give up was not measured.
+- Bad, because the gateway's key opens the whole of the service's API, not only inference. By `serve/server.py` at `477ac13`, `POST /config`, `/settings` and `/v1/unload` need only a key, a JSON body and no foreign `Origin`. This comes from reading the code; it was not tried on the service.
 
 ### Confirmation
 
-`scripts/check-drift.sh` compares both units with what systemd loaded, and requires this machine's drop-in, with one host's address and nothing else, without printing the address. `scripts/check-deployment.sh` reports a problem when the socket is not active and enabled.
+`scripts/check-drift.sh` compares both units with what systemd loaded, and requires this machine's drop-in, with one host's address and nothing else, without printing the address. `scripts/check-deployment.sh` reports a problem when the socket is not active and enabled, when `/v1/models` answers 200 without a key, and when anyone but its owner can read the live config.
 
 ## Pros and Cons of the Options
 

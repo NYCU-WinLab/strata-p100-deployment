@@ -93,7 +93,7 @@ A change to `strata-q3.service` takes effect at the next start. Until then, `scr
    ```bash
    sudo systemctl enable --now strata-gateway-proxy.socket
    ```
-   It says that the unit `is added as a dependency to a non-existent unit`: a device has no unit file, and this is expected.
+   It says that the unit `is added as a dependency to a non-existent unit`: a device has no unit file, and this is expected. `wt0` must exist first: without it, this command waits 90 s and exits 1, the socket stays enabled, and it starts when `wt0` appears (on a test VM on 2026-11-08, with systemd 249; not in `results/`).
    Then, from the gateway, connect to port 8000 of this machine's overlay address. Expected: the connection times out. This shows that the address list is in force: systemd only warns when it cannot apply one.
 3. Write the drop-in, with the gateway's overlay address for `<address>`:
    ```bash
@@ -104,6 +104,6 @@ A change to `strata-q3.service` takes effect at the next start. Until then, `scr
    sudo systemctl restart strata-gateway-proxy.socket
    ```
 4. From the gateway, request `/v1/models` on port 8000 of this machine's overlay address, with the key. Expected: the model's name. Without the key: 401.
-5. Run `scripts/check-drift.sh`, which must report `no drift`, and `STRATA_KEY=<key> scripts/check-deployment.sh`.
+5. Run `scripts/check-drift.sh`, which must report `no drift`, and `scripts/check-deployment.sh`.
 
-To change the address, repeat step 3. To cut the gateway off, run `sudo systemctl stop strata-gateway-proxy.socket`: the connections through the forwarder end, and the service keeps running. `sudo systemctl start strata-gateway-proxy.socket` lets it in again.
+To change the address, repeat step 3. To cut the gateway off, run `sudo systemctl disable --now strata-gateway-proxy.socket`: the connections through the forwarder end, and the service keeps running. `sudo systemctl enable --now strata-gateway-proxy.socket` lets it in again. `stop` is not enough: `WantedBy=` starts the socket again when the overlay's client restarts and makes `wt0` again. On a test VM on 2026-11-08 (systemd 249, kernel 5.15; not in `results/`), the gateway's side got a 200 about 15 s after that, with nobody running `start`.

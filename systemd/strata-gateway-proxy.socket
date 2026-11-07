@@ -11,8 +11,9 @@ After=sys-subsystem-net-devices-wt0.device
 ListenStream=0.0.0.0:8000
 # Only what arrives on the overlay's interface: nothing listens on the machine's own network
 BindToDevice=wt0
-# systemd-socket-proxyd has no timeouts, and a connection counts against its --connections-max until it ends: a peer
-# that vanishes with the overlay is found within 2 minutes (60 s, then 4 probes 15 s apart), and its place is free again
+# systemd-socket-proxyd has no timeouts: a connection holds its place, and a slot of the service, until it ends.  A
+# silent peer that vanishes with the overlay is found within 2 minutes (60 s, then 4 probes 15 s apart).  Keepalive does
+# not run while data waits for an acknowledgement, as during a stream: TCP's retransmission decides then, and later
 KeepAlive=yes
 KeepAliveTimeSec=60
 KeepAliveIntervalSec=15

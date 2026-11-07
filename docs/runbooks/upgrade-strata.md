@@ -57,11 +57,10 @@
      cp -a ~/dev/strata-<old version>/.venv ~/dev/strata/.venv       # the same path as before
      cp -p ~/dev/strata-<old version>/strata-iq3_xxs.json ~/dev/strata/
      cd ~/dev/p100-q3-deployment && python3 tools/configure_strata_q3.py ~/dev/strata/strata-iq3_xxs.json $(sed -e 's/#.*//' config/profile.conf)
-     cmp ~/dev/strata/strata-iq3_xxs.json config/strata-iq3_xxs.deployed.json && scripts/check-drift.sh
-     sudo systemctl start strata-q3 && sudo systemctl start strata-q3-health.timer
+     scripts/check-drift.sh && sudo systemctl start strata-q3 && sudo systemctl start strata-q3-health.timer
      scripts/check-deployment.sh
      ```
-     Expected: `no drift` before the start, `no problems found` after it. The engine's start-up lines show the new version.
+     Expected: `no drift` before the start, `no problems found` after it. The engine's start-up lines show the new version. `check-drift.sh` compares the config without its `api_key`; a `cmp` with the snapshot always differs now that the config has one.
 
 ## Rollback
 
