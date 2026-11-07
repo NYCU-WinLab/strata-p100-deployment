@@ -31,7 +31,7 @@ Chosen option: 1, because it needs no new port on any network, no change of the 
 
 - `systemd/strata-gateway-proxy.socket` listens on port 8000, bound to `wt0` (`BindToDevice=`), so only what arrives on the overlay's interface reaches it.
 - It refuses every address (`IPAddressDeny=any`) but the gateway's. That address is not in this public repository: it is in a drop-in that only this machine has, `/etc/systemd/system/strata-gateway-proxy.socket.d/10-gateway-address.conf`. [Let the gateway in](../runbooks/change-config.md#let-the-gateway-in) gives the steps.
-- `systemd/strata-gateway-proxy.service` runs `systemd-socket-proxyd`, which comes with systemd, as a dynamic user that can reach loopback only. It allows 8 connections at a time, and a peer that vanishes with the overlay is found within 2 minutes (TCP keepalive), because the proxy has no timeouts of its own.
+- `systemd/strata-gateway-proxy.service` runs `systemd-socket-proxyd`, which comes with systemd, as a dynamic user that can reach loopback only. It allows 32 connections at a time, well above what the gateway opens, because past the limit it resets a connection instead of queueing it, and a peer that vanishes with the overlay is found within 2 minutes (TCP keepalive), because the proxy has no timeouts of its own.
 - The service has an API key now, one for the gateway and one for local use, in `"api_key"` of the live config. They are in no file of this repository.
 
 ### Consequences

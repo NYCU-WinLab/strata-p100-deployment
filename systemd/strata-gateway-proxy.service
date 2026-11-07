@@ -4,9 +4,11 @@ Requires=strata-gateway-proxy.socket
 After=strata-gateway-proxy.socket
 
 [Service]
-# 8: the service has 4 slots; the others are for the gateway's model checks and for connections that are closing.  It
-# has no dependency on strata-q3.service, which it never starts or stops: while that is down, a connection just ends
-ExecStart=/lib/systemd/systemd-socket-proxyd --connections-max=8 127.0.0.1:8080
+# 32 does not limit the work: the gateway admits 4 requests a slot, and the service queues what its 4 slots cannot take.
+# At the limit the proxy resets a connection instead of queueing it, so the limit stays well above what two gateway
+# slots open during a cutover.  It has no dependency on strata-q3.service, which it never starts or stops: while that
+# is down, a connection just ends
+ExecStart=/lib/systemd/systemd-socket-proxyd --connections-max=32 127.0.0.1:8080
 # A user of its own for each run.  This implies ProtectSystem=strict, ProtectHome=read-only, PrivateTmp=yes and
 # NoNewPrivileges=yes; it needs no file and no capability
 DynamicUser=yes
