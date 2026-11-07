@@ -40,6 +40,7 @@ class TheKey(unittest.TestCase):
         self.d = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.d, True)
         self.seen = seen = []
+        self.keyless = keyless = {"status": 200}
 
         class H(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
@@ -47,7 +48,7 @@ class TheKey(unittest.TestCase):
                 body = {"/health": {"status": "ok", "loaded": True, "model": "m", "max_context": 1},
                         "/v1/models": {"object": "list", "data": [{"id": "m"}]}}.get(self.path, {})
                 data = json.dumps(body).encode()
-                self.send_response(200)
+                self.send_response(200 if self.headers.get("Authorization") else keyless["status"])
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
@@ -91,17 +92,21 @@ class TheKey(unittest.TestCase):
     def test_the_key_goes_in_a_header_file_never_on_a_command_line(self):
         r = self.run_check(STRATA_KEY=KEY)
         calls = self.calls()
-        self.assertEqual(len(calls), 4, r.stdout + r.stderr)          # /health, /v1/models twice, /v1/status
+        self.assertEqual(len(calls), 5, r.stdout + r.stderr)          # /health, /v1/models 3 times, /v1/status
         for c in calls:
             self.assertEqual(c["args"][0], "-q", c["args"])          # first, or curl reads ~/.curlrc
             self.assertFalse(any(KEY in a for a in c["args"]), "the key is on curl's command line")
+        keyed = [c for c in calls if "header" in c]
+        self.assertEqual(len(keyed), 4, calls)                        # the fifth asks without a key, on purpose
+        for c in keyed:
             h = c["header"]
             self.assertEqual((h["mode"], h["dir_mode"]), (0o600, 0o700), h)
             self.assertEqual(h["text"], f"Authorization: Bearer {KEY}\n")
             self.assertFalse(os.path.exists(h["path"]) or os.path.exists(os.path.dirname(h["path"])),
                              "the header file was left behind")
-        self.assertEqual(sorted(p for p, _ in self.seen), ["/health", "/v1/models", "/v1/models", "/v1/status"])
-        self.assertEqual({a for _, a in self.seen}, {f"Bearer {KEY}"})
+        self.assertEqual(sorted(p for p, _ in self.seen),
+                         ["/health", "/v1/models", "/v1/models", "/v1/models", "/v1/status"])
+        self.assertEqual({a for _, a in self.seen}, {f"Bearer {KEY}", None})
         self.assertIn('"loaded": true', (self.d / "calls.jsonl.jq").read_text())   # not sent to ~/.curlrc's /dev/null
 
     def test_the_gateways_socket_counts(self):
@@ -118,10 +123,47 @@ class TheKey(unittest.TestCase):
 
     def test_no_key_no_header(self):
         r = self.run_check()
-        self.assertEqual(len(self.calls()), 4, r.stdout + r.stderr)
+        self.assertEqual(len(self.calls()), 5, r.stdout + r.stderr)
         for c in self.calls():
             self.assertNotIn("-H", c["args"])
         self.assertEqual({a for _, a in self.seen}, {None})
+
+    def test_the_local_key_goes_to_this_machine_only(self):
+        local = self.home / ".config/strata/local-api-key"
+        local.parent.mkdir(parents=True)
+        for text in (f"{KEY}\n", KEY):                  # with and without the last newline
+            with self.subTest(text=text[-1]):
+                self.seen.clear()
+                local.write_text(text)
+                self.run_check()
+                self.assertEqual({a for _, a in self.seen}, {f"Bearer {KEY}", None})
+        self.seen.clear()
+        self.run_check(STRATA_KEY="k-from-the-caller")
+        self.assertEqual({a for _, a in self.seen}, {"Bearer k-from-the-caller", None})
+        self.log.unlink()
+        self.run_check("http://127.0.0.2:9")                # another address: it gets no key of this machine
+        self.assertTrue(self.calls())
+        for c in self.calls():
+            self.assertNotIn("-H", c["args"])
+
+    def test_a_service_that_answers_without_a_key_is_a_problem(self):
+        said = "PROBLEM: /v1/models answered 200 without a key: the service has no API key (decision 0008)"
+        r = self.run_check(STRATA_KEY=KEY)
+        self.assertIn(said, r.stdout)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.keyless["status"] = 401
+        self.assertNotIn(said, self.run_check(STRATA_KEY=KEY).stdout)
+
+    def test_the_live_config_is_for_its_owner_only(self):
+        d = self.d / "strata"
+        d.mkdir()
+        cfg = d / "strata-iq3_xxs.json"
+        cfg.write_text("{}")
+        for mode, wrong in ((0o600, False), (0o400, False), (0o640, True), (0o664, True), (0o604, True)):
+            with self.subTest(mode=oct(mode)):
+                cfg.chmod(mode)
+                r = self.run_check(STRATA_DIR=str(d))
+                self.assertEqual("holds the API keys" in r.stdout, wrong, r.stdout)
 
     def test_a_key_with_a_control_character_is_not_sent(self):
         # it is a problem, so the check ends with exit 1, whatever else it finds
@@ -207,8 +249,8 @@ class TheKey(unittest.TestCase):
                 self.run_check(url, STRATA_KEY=KEY, **{var: f"http://127.0.0.1:{proxy.server_address[1]}"})
                 self.assertEqual(proxied, [], f"requests went to the proxy of {var}")
                 self.assertEqual(sorted(p for p, _ in self.seen),
-                                 ["/health", "/v1/models", "/v1/models", "/v1/status"])
-                self.assertEqual({a for _, a in self.seen}, {f"Bearer {KEY}"})
+                                 ["/health", "/v1/models", "/v1/models", "/v1/models", "/v1/status"])
+                self.assertEqual({a for _, a in self.seen}, {f"Bearer {KEY}", None})
 
 
 if __name__ == "__main__":

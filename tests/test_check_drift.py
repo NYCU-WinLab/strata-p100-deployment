@@ -978,7 +978,7 @@ class CheckDrift(unittest.TestCase):
             ("two on a line", holds("[Socket]\nIPAddressAllow=192.0.2.10 192.0.2.11\n", "to something that is not one address")),
             ("an empty value", holds("[Socket]\nIPAddressAllow=\n", "to something that is not one address")),
             ("two lines", holds("[Socket]\nIPAddressAllow=192.0.2.10\nIPAddressAllow=192.0.2.11\n", once)),
-            ("another key", holds("[Socket]\nIPAddressAllow=192.0.2.10\nBindToDevice=ens160\n", once)),
+            ("another key", holds("[Socket]\nIPAddressAllow=192.0.2.10\nBindToDevice=eth1\n", once)),
             ("the deny list emptied", holds("[Socket]\nIPAddressDeny=\nIPAddressAllow=192.0.2.10\n", once)),
             ("nothing in it", holds("# empty\n", once)),
             ("a line that goes on", holds("[Socket]\nIPAddressAllow=192.0.2.10\\\n/24\n", "that ends with a backslash")),

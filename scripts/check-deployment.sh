@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Read-only health and acceptance check for the Strata service on 4x P100 (IQ3_XXS or IQ3_S, config/profile.conf).  Exits 1 when the service, its
-# timer, the ARC cap, the gateway's socket or the API is not as deployed (a problem line says which), 0 otherwise.
-# Usage: scripts/check-deployment.sh [base-url]   (default http://127.0.0.1:8080; STRATA_KEY=<key> if one is set)
+# timer, the ARC cap, the gateway's socket, the API or its key is not as deployed (a problem line says which), 0 otherwise.
+# Usage: scripts/check-deployment.sh [base-url]   (default http://127.0.0.1:8080)
+# The key is STRATA_KEY, else, for an address on this machine, ~/.config/strata/local-api-key.
 # The key goes to curl in a header file of its own (0600, in a directory of its own), never on a command line, which
 # every account on the machine can read in /proc; a key with a control character is not sent.  curl runs with -q, its
 # first option, so that no ~/.curlrc changes the requests or where their answers go, and with --noproxy '*', so that
@@ -16,7 +17,11 @@ problems=()
 problem() { problems+=("$1"); echo "PROBLEM: $1"; }
 AUTH=()
 keydir=
+local_key=$HOME/.config/strata/local-api-key
 trap '[ -z "$keydir" ] || rm -rf -- "$keydir"' EXIT
+if [ -z "${STRATA_KEY:-}" ] && [ -r "$local_key" ]; then
+  case $URL in http://127.0.0.1:*) IFS= read -r STRATA_KEY < "$local_key" ;; esac   # a builtin: no command line
+fi
 if [ -n "${STRATA_KEY:-}" ]; then
   case $STRATA_KEY in
     *[[:cntrl:]]*) problem "STRATA_KEY holds a control character: it is not sent" ;;
@@ -44,6 +49,14 @@ case $code in
   *) problem "/v1/models answered ${code:-nothing}" ;;
 esac
 [ "$code" = 200 ] && curl -q --noproxy '*' -fsS -m 10 "${AUTH[@]}" "$URL/v1/models" | jq -r '.data[].id'
+# Decision 0008 counts the key as a check, and a config without one starts all the same
+bare=$(curl -q --noproxy '*' -s -o /dev/null -w '%{http_code}' -m 10 "$URL/v1/models")
+[ "$bare" = 200 ] && problem "/v1/models answered 200 without a key: the service has no API key (decision 0008)"
+mode=$(stat -c %a -- "$STRATA_DIR/strata-iq3_xxs.json" 2>/dev/null)
+case $mode in
+  ''|?00) ;;
+  *) problem "$STRATA_DIR/strata-iq3_xxs.json holds the API keys and its mode is $mode: other accounts can read it" ;;
+esac
 curl -q --noproxy '*' -fsS -m 10 "${AUTH[@]}" "$URL/v1/status" |
   jq -c '{engine, concurrency, context: .context.native, activity}' || true
 
