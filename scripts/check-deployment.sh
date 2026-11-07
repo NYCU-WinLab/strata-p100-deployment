@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Read-only health and acceptance check for the Strata service on 4x P100 (IQ3_XXS or IQ3_S, config/profile.conf).  Exits 1 when the service, its
-# timer, the ARC cap or the API is not as deployed (a problem line says which), 0 otherwise.
+# timer, the ARC cap, the gateway's socket or the API is not as deployed (a problem line says which), 0 otherwise.
 # Usage: scripts/check-deployment.sh [base-url]   (default http://127.0.0.1:8080; STRATA_KEY=<key> if one is set)
 # The key goes to curl in a header file of its own (0600, in a directory of its own), never on a command line, which
 # every account on the machine can read in /proc; a key with a control character is not sent.  curl runs with -q, its
@@ -27,9 +27,9 @@ if [ -n "${STRATA_KEY:-}" ]; then
 fi
 
 section "service"
-for u in strata-q3.service strata-q3-health.timer zfs-arc-max.service; do
+for u in strata-q3.service strata-q3-health.timer zfs-arc-max.service strata-gateway-proxy.socket; do
   a=$(systemctl is-active "$u" 2>/dev/null); e=$(systemctl is-enabled "$u" 2>/dev/null)
-  printf '%-26s %s / %s\n' "$u" "$a" "$e"
+  printf '%-28s %s / %s\n' "$u" "$a" "$e"
   if [ "$a" != active ] || [ "$e" != enabled ]; then problem "$u is $a / $e, not active / enabled"; fi
 done
 

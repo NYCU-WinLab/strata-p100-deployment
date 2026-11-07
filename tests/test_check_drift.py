@@ -49,7 +49,11 @@ import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-UNITS = ("strata-q3.service", "strata-q3-health.service", "strata-q3-health.timer", "zfs-arc-max.service")
+UNITS = ("strata-q3.service", "strata-q3-health.service", "strata-q3-health.timer", "zfs-arc-max.service",
+         "strata-gateway-proxy.socket", "strata-gateway-proxy.service")
+GATEWAY = "strata-gateway-proxy.socket"
+GATEWAY_DROPIN = f"/etc/systemd/system/{GATEWAY}.d/10-gateway-address.conf"     # this machine's: no copy in the repo
+GATEWAY_ADDRESS = "192.0.2.10/32"                   # an address for documentation (RFC 5737)
 LIVE = "/home/thc1006/dev/p100-q3-deployment"       # what the repo's units name
 STRATA = "/home/thc1006/dev/strata"
 MANAGER_PATH = "/usr/local/bin:/usr/bin:/bin"       # root's directories, on any Ubuntu
@@ -249,8 +253,13 @@ def show_of(unit_file: Path | None, unit: str, dropins: list | None = None) -> d
                                            f" ; ignore_errors={'yes' if '-' in prefix else 'no'} ; start_time=[n/a] ; "
                                            "pid=0 }")
         elif k in ("NoNewPrivileges", "PrivateTmp", "RemainAfterExit", "ProtectHome", "ProtectSystem",
-                   "RuntimeDirectoryPreserve"):         # a boolean in any spelling: yes or no
+                   "RuntimeDirectoryPreserve", "KeepAlive", "DynamicUser", "PrivateDevices", "ProtectKernelTunables",
+                   "ProtectKernelModules", "ProtectControlGroups"):         # a boolean in any spelling: yes or no
             props[k] = BOOLEAN.get(v.strip().lower(), v)
+        elif k == "ListenStream":
+            props["Listen"] = f"{v} (Stream)"
+        elif k in ("IPAddressAllow", "IPAddressDeny"):  # what a word stands for, in no fixed order (systemd 249)
+            props[k] = {"any": "::/0 0.0.0.0/0", "localhost": "::1/128 127.0.0.0/8"}.get(v, v)
         elif k == "RuntimeDirectoryMode":
             props[k] = f"{int(v, 8):04o}"
         elif k in ("LimitNOFILE", "LimitMEMLOCK"):      # the hard limit, and the soft one apart
@@ -479,6 +488,12 @@ class Sandbox:
         # systemctl, and the memory limits of the units' cgroups
         self.spec = {u: show_of(self.repo / "systemd" / u, u) for u in UNITS}
         self.spec["__manager__"] = {"LANG": "C.UTF-8", "PATH": MANAGER_PATH}
+        # this machine's own drop-in of the gateway's socket, and what systemd loads of it
+        host = self.sys / GATEWAY_DROPIN.lstrip("/")
+        host.parent.mkdir()
+        host.write_text(f"[Socket]\nIPAddressAllow={GATEWAY_ADDRESS}\n")
+        os.chmod(host, 0o644)
+        self.spec[GATEWAY].update(DropInPaths=GATEWAY_DROPIN, IPAddressAllow=GATEWAY_ADDRESS)
         for d in sorted((self.repo / "systemd").glob("*.d")):
             self.install_dropins(d.name[:-2])
         self.cgroups()
@@ -880,6 +895,133 @@ class CheckDrift(unittest.TestCase):
         def roots(sb):                                  # root's, as install-system-files.sh installs them
             return {"drift": f"is owner:group mode {own} 644, not 0:0 644", "env": {"DRIFT_OWNER": "0:0"}}
         self.each([(f.__name__, f) for f in (edited, missing, zfs, mode, roots)])
+
+    def test_the_gateway_socket_and_this_machines_drop_in(self):
+        host = lambda sb: sb.sys / GATEWAY_DROPIN.lstrip("/")          # noqa: E731
+        hidden = ["192.0.2.", "198.51.100."]                           # no address is printed, whatever is wrong
+
+        def as_loaded(sb):                  # the spans as systemd prints them; the addresses are in another order
+            sb.spec[GATEWAY].update(KeepAliveTimeUSec="1min", KeepAliveIntervalUSec="15s", IPAddressDeny="0.0.0.0/0 ::/0")
+            sb.save_spec()
+            return {"absent": hidden, "then": lambda r: self.assertIn(
+                f"ok     {GATEWAY} (loaded: as the repo's file and this machine's drop-in, 12 settings)", r.stdout)}
+
+        def holds(text, says=None, loaded=None):
+            def prepare(sb):
+                host(sb).write_text(text)
+                if loaded:
+                    sb.spec[GATEWAY]["IPAddressAllow"] = loaded
+                    sb.save_spec()
+                return {"drift": says, "absent": hidden}
+            return prepare
+
+        def missing(sb):
+            host(sb).unlink()
+            return {"drift": f"DRIFT  {GATEWAY}: {GATEWAY_DROPIN} is missing: without it the socket refuses every address"}
+
+        def not_a_file(make):
+            def prepare(sb):
+                host(sb).unlink()
+                make(host(sb))
+                return {"drift": f"{GATEWAY_DROPIN} is not a regular file"}
+            return prepare
+
+        def mode(sb):
+            os.chmod(host(sb), 0o664)
+            return {"drift": f"{host(sb)} is owner:group mode"}
+
+        def link(sb):                       # its mode is a link's, not the file's
+            real = sb.d / "elsewhere-address.conf"
+            real.write_text(host(sb).read_text())
+            host(sb).unlink()
+            os.symlink(real, host(sb))
+            return {"drift": f"{host(sb)} is owner:group mode"}
+
+        def roots(sb):
+            return {"drift": f"{host(sb)} is owner:group mode", "env": {"DRIFT_OWNER": "0:0"}}
+
+        def not_loaded(sb):
+            sb.spec[GATEWAY]["DropInPaths"] = ""
+            sb.save_spec()
+            return {"drift": f"{GATEWAY_DROPIN} is installed, but systemd has not loaded it (daemon-reload)"}
+
+        def loaded_elsewhere(sb):
+            sb.spec[GATEWAY]["DropInPaths"] += f" /run/systemd/system/{GATEWAY}.d/x.conf"
+            sb.save_spec()
+            return {"drift": "drop-ins override it"}
+
+        def loaded(prop, value, says, unit=GATEWAY):
+            def prepare(sb):
+                sb.spec[unit][prop] = value
+                sb.save_spec()
+                return {"drift": says, "absent": hidden}
+            return prepare
+
+        def beside_it(unit, name):          # the exception is one name of one unit
+            def prepare(sb):
+                d = sb.sys / f"etc/systemd/system/{unit}.d"
+                d.mkdir(parents=True, exist_ok=True)
+                (d / name).write_text(f"[Socket]\nIPAddressAllow={GATEWAY_ADDRESS}\n")
+                os.chmod(d / name, 0o644)
+                return {"drift": f"has {name}, which the repo's systemd/{unit}.d does not have", "absent": hidden}
+            return prepare
+        addresses = "IPAddressAllow: the loaded addresses are not the ones the repo's files and this machine's drop-in give"
+        once = "must set IPAddressAllow= once, and nothing else"
+        self.each([
+            ("as systemd prints it", as_loaded),
+            ("a bare address", holds("[Socket]\nIPAddressAllow=192.0.2.10\n")),
+            ("one IPv6 host", holds("[Socket]\nIPAddressAllow=2001:db8::1/128\n", loaded="2001:db8::1/128")),
+            ("missing", missing),
+            ("a prefix", holds("[Socket]\nIPAddressAllow=192.0.2.0/24\n", "allows more than one address")),
+            ("all of it", holds("[Socket]\nIPAddressAllow=0.0.0.0/0\n", "allows more than one address")),
+            ("any", holds("[Socket]\nIPAddressAllow=any\n", "to something that is not one address")),
+            ("two on a line", holds("[Socket]\nIPAddressAllow=192.0.2.10 192.0.2.11\n", "to something that is not one address")),
+            ("an empty value", holds("[Socket]\nIPAddressAllow=\n", "to something that is not one address")),
+            ("two lines", holds("[Socket]\nIPAddressAllow=192.0.2.10\nIPAddressAllow=192.0.2.11\n", once)),
+            ("another key", holds("[Socket]\nIPAddressAllow=192.0.2.10\nBindToDevice=ens160\n", once)),
+            ("the deny list emptied", holds("[Socket]\nIPAddressDeny=\nIPAddressAllow=192.0.2.10\n", once)),
+            ("nothing in it", holds("# empty\n", once)),
+            ("a line that goes on", holds("[Socket]\nIPAddressAllow=192.0.2.10\\\n/24\n", "that ends with a backslash")),
+            ("a NUL byte", holds("[Socket]\nIPAddressAllow=192.0.2.10\n\0IPAddressAllow=any\n", "with a NUL byte")),
+            ("a link to /dev/null", not_a_file(lambda f: os.symlink("/dev/null", f))),
+            ("a directory", not_a_file(lambda f: f.mkdir())),
+            ("a FIFO", not_a_file(os.mkfifo)),
+            ("its mode", mode), ("a link to a file", link), ("not root's", roots),
+            ("not loaded", not_loaded), ("another drop-in loaded", loaded_elsewhere),
+            ("in the wrong section: nothing loaded", loaded("IPAddressAllow", "", addresses)),
+            ("another address loaded", loaded("IPAddressAllow", "192.0.2.11/32", addresses)),
+            ("one more address loaded", loaded("IPAddressAllow", f"{GATEWAY_ADDRESS} 198.51.100.1/32", addresses)),
+            ("a second file", beside_it(GATEWAY, "20-more.conf")),
+            ("its name on the service", beside_it("strata-gateway-proxy.service", "10-gateway-address.conf")),
+            ("its name on the engine's unit", beside_it("strata-q3.service", "10-gateway-address.conf")),
+            # the repo's settings, as loaded
+            ("open to all", loaded("IPAddressDeny", "", "IPAddressDeny: the loaded addresses are not the ones")),
+            ("on all interfaces", loaded("BindToDevice", "", "BindToDevice is ''")),
+            ("another port", loaded("Listen", "0.0.0.0:18080 (Stream)", "ListenStream: the loaded socket is")),
+            ("a second socket", loaded("Listen", ["0.0.0.0:8000 (Stream)", "0.0.0.0:8080 (Stream)"],
+                                       "ListenStream: the loaded socket is")),
+            ("not enabled", loaded("WantedBy", "", "WantedBy lacks sys-subsystem-net-devices-wt0.device")),
+            ("not bound to the device", loaded("BindsTo", "", "BindsTo lacks sys-subsystem-net-devices-wt0.device")),
+            ("no keepalive", loaded("KeepAlive", "no", "KeepAlive is 'no'")),
+            ("a longer wait", loaded("KeepAliveTimeUSec", "2h", "KeepAliveTimeSec is '2h'")),
+            ("the proxy may reach all", loaded("IPAddressAllow", "0.0.0.0/0", addresses, "strata-gateway-proxy.service")),
+            ("the proxy's own user", loaded("DynamicUser", "no", "DynamicUser is 'no'", "strata-gateway-proxy.service")),
+            ("the proxy's capabilities", loaded("CapabilityBoundingSet", "cap_net_raw", "CapabilityBoundingSet is 'cap_net_raw'",
+                                                "strata-gateway-proxy.service")),
+            ("the proxy without its socket", loaded("Requires", "", "Requires lacks strata-gateway-proxy.socket",
+                                                    "strata-gateway-proxy.service")),
+        ])
+
+    def test_the_installer_and_this_check_have_every_unit(self):
+        units = {f.name for f in (ROOT / "systemd").iterdir() if f.is_file() and f.suffix != ".logrotate"}
+        self.assertEqual(units, set(UNITS))
+        installer = (ROOT / "scripts/install-system-files.sh").read_text()
+        for u in units:
+            self.assertIn(u, installer)
+            self.assertIn(u, (ROOT / "scripts/check-drift.sh").read_text())
+        enable = [l for l in installer.splitlines() if "systemctl enable" in l and not l.lstrip().startswith("#")]
+        self.assertTrue(enable)                     # refuses every address until this machine has the gateway's
+        self.assertFalse([l for l in enable if "gateway" in l], enable)
 
     def test_what_systemd_loaded(self):
         cases = [

@@ -104,6 +104,18 @@ class TheKey(unittest.TestCase):
         self.assertEqual({a for _, a in self.seen}, {f"Bearer {KEY}"})
         self.assertIn('"loaded": true', (self.d / "calls.jsonl.jq").read_text())   # not sent to ~/.curlrc's /dev/null
 
+    def test_the_gateways_socket_counts(self):
+        r = self.run_check()
+        self.assertIn("strata-gateway-proxy.socket  active / enabled", r.stdout)
+        self.assertNotIn("PROBLEM: strata-gateway-proxy.socket", r.stdout)
+        (self.d / "bin" / "systemctl").write_text(
+            '#!/bin/sh\ncase "$1 $2" in\n  is-active\\ strata-gateway-proxy.socket) echo inactive ;;\n'
+            '  is-enabled\\ strata-gateway-proxy.socket) echo disabled ;;\n  is-active\\ *) echo active ;;\n'
+            '  is-enabled\\ *) echo enabled ;;\nesac\n')
+        r = self.run_check()
+        self.assertIn("PROBLEM: strata-gateway-proxy.socket is inactive / disabled, not active / enabled", r.stdout)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
     def test_no_key_no_header(self):
         r = self.run_check()
         self.assertEqual(len(self.calls()), 4, r.stdout + r.stderr)

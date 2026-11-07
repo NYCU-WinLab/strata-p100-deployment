@@ -187,6 +187,8 @@ scripts/install-system-files.sh --enable
 ```
 It installs the units, the drop-in `user-1003.slice.d/50-memory.conf` (the account's 6 GiB), the logrotate rule and the watchdog, enables and starts `zfs-arc-max.service` (the ARC cap of 2 GiB) and enables `strata-q3` and its timer (`scripts/install-system-files.sh:25-37`).
 
+`--enable` leaves `strata-gateway-proxy.socket` alone: it refuses every address until this machine has the gateway's. Once the service works, [Let the gateway in](change-config.md#let-the-gateway-in) gives the steps, and `scripts/check-drift.sh` reports the missing drop-in until then.
+
 Not rehearsed (sudo, `/etc`). The script, without `--enable`, installed `strata-q3.service` and `zfs-arc-max.service` on 2026-10-19 (`results/deploy-0.1.45-20261019.txt`); no record shows a run with `--enable`. Production's `check-drift.sh` of 2026-10-30 found the installed files as the repository's (`results/rebuild-rehearsal-r8-r11-20261030.txt`, after R11).
 
 ### 13. The host units

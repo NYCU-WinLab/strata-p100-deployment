@@ -22,6 +22,8 @@ This repository has one maintainer and no fixed response time.
 
 ## Notes on the deployment
 
-The service listens only on `127.0.0.1:8080` and has no API key set, as described in the
-[deployment record](docs/deployment-record.md#5-known-limits-to-share-with-lab-members). If you expose the service
-beyond the local machine, set an API key first.
+The service listens only on `127.0.0.1:8080` and has an API key set, as described in the
+[deployment record](docs/deployment-record.md#5-known-limits-to-share-with-lab-members). The lab's LLM gateway is the
+only other way in: a forwarder on the overlay network's interface that takes connections from the gateway's address
+alone ([decision 0008](docs/decisions/0008-gateway-through-a-forwarder-on-the-overlay.md)). Nothing listens on the
+machine's own network. Do not expose the service in any other way.

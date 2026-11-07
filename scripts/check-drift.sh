@@ -11,10 +11,13 @@
 #      systemd reads for the unit (<unit>.d, each dash prefix's and <type>.d, in each directory of its search path)
 #      holds no .conf that it has not loaded (a new directory too: daemon-reload); the memory limits in force (the
 #      cgroup's memory.max and memory.swap.max) are the ones they give; the ZFS ARC limits are what zfs-arc-max.service
-#      writes.  An empty assignment (ExecStart=, Environment=) empties the list before it, as systemd does; a drop-in
-#      of the repo that sets for strata-q3.service or zfs-arc-max.service what the rest of the check reads from the
-#      unit file alone (ExecStart=; strata-q3.service's ExecStartPre= and the settings of its process) is drift: set
-#      it in the unit file
+#      writes.  One drop-in is this machine's and not the repo's: strata-gateway-proxy.socket.d/10-gateway-address.conf
+#      holds the gateway's address, which a public repository does not (decision 0008).  It must be there, root's, and
+#      set IPAddressAllow= to one host's address and nothing else, and that must be what systemd loaded; no other unit
+#      and no other name has this exception, and the address is not printed.  An empty assignment (ExecStart=,
+#      Environment=) empties the list before it, as systemd does; a drop-in of the repo that sets for strata-q3.service
+#      or zfs-arc-max.service what the rest of the check reads from the unit file alone (ExecStart=; strata-q3.service's
+#      ExecStartPre= and the settings of its process) is drift: set it in the unit file
 #   2. the host's units are in the states config/host-units.conf gives (scripts/host-units.sh check)
 #   3. the live Strata config (the one the repo's unit starts server.py with) equals
 #      config/strata-iq3_xxs.deployed.json, and that snapshot is what configure_strata_q3.py makes from setup's
@@ -134,6 +137,7 @@ export GIT_CONFIG_KEY_2=core.attributesFile GIT_CONFIG_VALUE_2=/dev/null
 # the repo's files that this check reads: a FIFO or a device in the place of one would hang it or do something when
 # it is read, so it stops here (the comparison of the checkout with its commit, below, says what else differs)
 for f in "systemd/$UNIT" systemd/strata-q3-health.service systemd/strata-q3-health.timer systemd/zfs-arc-max.service \
+         systemd/strata-gateway-proxy.socket systemd/strata-gateway-proxy.service \
          systemd/strata-q3.logrotate scripts/strata-health.sh tools/configure_strata_q3.py config/profile.conf \
          config/host-units.conf config/deployed-artifacts.sha256 config/strata-venv.txt \
          config/strata-iq3_xxs.deployed.json config/strata-iq3_xxs.setup.json; do
@@ -255,7 +259,9 @@ sys.exit(any(os.path.exists(os.path.join(x, "pyvenv.cfg")) for x in (d, os.path.
 
 echo "== installed files, and what systemd loaded of each unit"
 # the repo's units, and each unit the repo has only drop-ins for (systemd/<unit>.d/*.conf: user-1003.slice)
-units=(strata-q3.service strata-q3-health.service strata-q3-health.timer zfs-arc-max.service)
+units=(strata-q3.service strata-q3-health.service strata-q3-health.timer zfs-arc-max.service
+       strata-gateway-proxy.socket strata-gateway-proxy.service)
+HOST_DROPIN=strata-gateway-proxy.socket.d/10-gateway-address.conf   # this machine's: the header, and decision 0008
 repo_units=" ${units[*]} "                        # the repo's own units: each has its file, also beside a drop-in
 for dir in "$D"/systemd/*.d; do
   [ -d "$dir" ] || continue
@@ -281,11 +287,21 @@ for u in "${units[@]}"; do
     same "$f" "$ROOT/etc/systemd/system/$u.d/${f##*/}" 644
     dropins+=("$f")
   done
+  host_dropin=
+  if [ "$u" = "${HOST_DROPIN%%.d/*}" ]; then
+    host_dropin=/etc/systemd/system/$HOST_DROPIN
+    # what it holds is read below, and whether it is a regular file is said there.  A link is one here, and its mode
+    # is not 644: stat does not follow it
+    if [ -f "$ROOT$host_dropin" ]; then
+      own=$(stat -c '%u:%g %a' "$ROOT$host_dropin" 2>/dev/null)
+      if [ "$own" != "$OWNER 644" ]; then drift "$ROOT$host_dropin is owner:group mode $own, not $OWNER 644"; fi
+    fi
+  fi
   # every property systemctl show has of the settings of the repo's file and drop-ins; a list (Wants=, After=) may
   # hold more, which systemd adds itself
-  python3 -I -S - "$u" "$file" "$ROOT" "${dropins[@]}" <<'EOF' || bad=1
-import io, json, os, re, shlex, stat, subprocess, sys
-unit, path, sysroot, dropins = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+  python3 -I -S - "$u" "$file" "$ROOT" "$host_dropin" "${dropins[@]}" <<'EOF' || bad=1
+import io, ipaddress, json, os, re, shlex, stat, subprocess, sys
+unit, path, sysroot, host_dropin, dropins = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
 class NotRegular(OSError):
     pass
 def open_regular(p):
@@ -330,11 +346,14 @@ def size(text):                     # a systemd size (MemoryMax=), in bytes: K, 
     return int(m.group(1)) * mult + int(frac) * mult // 10 ** len(frac)
 EXACT = {"Description", "Type", "User", "Group", "WorkingDirectory", "LimitMEMLOCK", "LimitNOFILE", "OOMScoreAdjust",
          "NoNewPrivileges", "ProtectSystem", "ProtectHome", "PrivateTmp", "KillMode", "Restart",
-         "RuntimeDirectory", "RuntimeDirectoryMode", "RuntimeDirectoryPreserve", "RemainAfterExit", "StartLimitBurst"}
+         "RuntimeDirectory", "RuntimeDirectoryMode", "RuntimeDirectoryPreserve", "RemainAfterExit", "StartLimitBurst",
+         "BindToDevice", "KeepAlive", "KeepAliveProbes", "DynamicUser", "CapabilityBoundingSet", "PrivateDevices",
+         "ProtectKernelTunables", "ProtectKernelModules", "ProtectControlGroups"}
 # what systemctl show prints otherwise than a unit may write it: a boolean in any of systemd's spellings as yes or no
 # (ProtectHome= and the like take a word of their own too), a mode as four octal digits, a limit as the hard one
 # (LimitX) and the soft one (LimitXSoft), a soft:hard pair or one value for both, a size with K, M, G... in bytes
-BOOLEAN = {"NoNewPrivileges", "PrivateTmp", "RemainAfterExit"}
+BOOLEAN = {"NoNewPrivileges", "PrivateTmp", "RemainAfterExit", "KeepAlive", "DynamicUser", "PrivateDevices",
+           "ProtectKernelTunables", "ProtectKernelModules", "ProtectControlGroups"}
 BOOLISH = {"ProtectHome", "ProtectSystem", "RuntimeDirectoryPreserve"}
 MODES = {"RuntimeDirectoryMode"}
 LIMITS = {"LimitMEMLOCK": size, "LimitNOFILE": int}
@@ -347,13 +366,20 @@ def limit(key, text):               # (soft, hard)
         raise ValueError(f"a limit this check does not read: {text!r}")
     one = lambda p: "infinity" if p.strip() == "infinity" else LIMITS[key](p.strip())     # noqa: E731
     return one(parts[0]), one(parts[-1])
-SUBSET = {"Wants", "After", "Before", "WantedBy"}
+SUBSET = {"Wants", "Requires", "BindsTo", "After", "Before", "WantedBy"}
 SPANS = {"TimeoutStartSec": "TimeoutStartUSec", "TimeoutStopSec": "TimeoutStopUSec", "RestartSec": "RestartUSec",
-         "StartLimitIntervalSec": "StartLimitIntervalUSec", "AccuracySec": "AccuracyUSec"}
+         "StartLimitIntervalSec": "StartLimitIntervalUSec", "AccuracySec": "AccuracyUSec",
+         "KeepAliveTimeSec": "KeepAliveTimeUSec", "KeepAliveIntervalSec": "KeepAliveIntervalUSec"}
 SIZES = {"MemoryMax": "memory.max", "MemorySwapMax": "memory.swap.max", "MemoryHigh": "memory.high",
          "MemoryLow": "memory.low", "MemoryMin": "memory.min"}          # the setting, and the cgroup file it writes
 TIMERS = {"OnBootSec": "OnBootUSec", "OnUnitActiveSec": "OnUnitActiveUSec"}
 EXEC = {"ExecStart", "ExecStartPre", "ExecStartPost"}
+LISTEN = {"ListenStream": "Stream"}             # systemctl show prints each as Listen=<address> (<this>)
+# the address lists: systemctl show prints what a word stands for, each address with its prefix, in no fixed order
+ADDRESSES = {"IPAddressAllow", "IPAddressDeny"}
+ADDRESS_WORDS = {"any": {"0.0.0.0/0", "::/0"}, "localhost": {"127.0.0.0/8", "::1/128"}}
+def addresses(values):
+    return {a for v in values for w in v.split() for a in ADDRESS_WORDS.get(w, {w})}
 FILE_ONLY = {"ConditionPathExists"}            # systemctl show prints no value for it: the file comparison covers it
 VENDOR = ("/usr/lib/systemd/system/", "/lib/systemd/system/")     # the system's own units and drop-ins
 class Continued(ValueError):
@@ -380,7 +406,7 @@ def settings(f):                                  # # or ; and strips from a lin
             yield key.strip(WS), value.strip(WS)
 # a list that an empty assignment empties, as systemd does: the commands of an Exec key, Environment (not a
 # dependency's, After=: systemd adds nothing for one, and empties none)
-RESET = EXEC | {"Environment"}
+RESET = EXEC | ADDRESSES | {"Environment"}
 # what the rest of this check reads of these units from their files alone (scripts/check-drift.sh above and below:
 # the live config and the service's checkout of strata-q3.service's ExecStart= and ExecStartPre=, what runs of its
 # ExecStart= and the settings of its process, the ZFS values of zfs-arc-max.service's ExecStart=): a drop-in of the
@@ -414,9 +440,41 @@ for f in ([] if path == "-" else [path]) + sorted(dropins, key=os.path.basename)
         print(f"DRIFT  {unit}: {f} cannot be read ({'not a regular file' if isinstance(e, NotRegular) else e.__class__.__name__}): "
               "what systemd loaded of it is not compared")
         sys.exit(1)
+def host_address(f):
+    """The one address that f allows, as systemctl show prints it, and None; or None and why f is not what it must be:
+    IPAddressAllow= with one host's address, and nothing else.  What f holds is not said: what this check prints ends
+    up in results/, and the address stays out of the repository."""
+    try:
+        got = list(settings(f))
+    except FileNotFoundError:
+        return None, "is missing: without it the socket refuses every address"
+    except NotRegular:
+        return None, "is not a regular file"
+    except Continued as e:
+        return None, f"has a line ({e.args[0]}) that ends with a backslash, which this check does not join with the next one"
+    except Nul as e:
+        return None, f"has a line ({e.args[0]}) with a NUL byte, where systemd ends a line and this check does not"
+    except (OSError, ValueError) as e:
+        return None, f"cannot be read ({e.__class__.__name__})"
+    if [key for key, _ in got] != ["IPAddressAllow"]:
+        return None, "must set IPAddressAllow= once, and nothing else"
+    try:
+        net = ipaddress.ip_network(got[0][1])
+    except ValueError:
+        return None, "sets IPAddressAllow= to something that is not one address"
+    if net.num_addresses != 1:
+        return None, "allows more than one address"
+    return str(net), None
+if host_dropin:
+    address, why = host_address(sysroot + host_dropin)
+    if why:
+        elsewhere.append(f"DRIFT  {unit}: {host_dropin} {why}")
+    else:
+        want["IPAddressAllow"] = [address]
 props = ["FragmentPath", "LoadState", "DropInPaths", "NeedDaemonReload", "TimersMonotonic",
          "ActiveState", "ControlGroup"]
-props += [k for k in want if k in EXACT | SUBSET | EXEC | set(SIZES)] + [SPANS[k] for k in want if k in SPANS]
+props += [k for k in want if k in EXACT | SUBSET | EXEC | ADDRESSES | set(SIZES)] + [SPANS[k] for k in want if k in SPANS]
+props += ["Listen"] if set(want) & set(LISTEN) else []
 props += [f"{k}Soft" for k in want if k in LIMITS]
 try:
     out = subprocess.run(["systemctl", "show", unit, "-p", ",".join(dict.fromkeys(props))], capture_output=True,
@@ -453,7 +511,7 @@ if one("NeedDaemonReload") != "no":
 # its drop-ins: the repo's, installed in /etc/systemd/system/<unit>.d, and no other .conf there; for a unit the repo
 # has no file of, the system's own too; and a copy of the repo's values that systemctl set-property --runtime made
 # in /run/systemd/system.control.  Nothing else
-mine = {f"/etc/systemd/system/{unit}.d/{os.path.basename(f)}" for f in dropins}
+mine = {f"/etc/systemd/system/{unit}.d/{os.path.basename(f)}" for f in dropins} | ({host_dropin} if host_dropin else set())
 here = f"{sysroot}/etc/systemd/system/{unit}.d"
 try:
     others = sorted(n for n in os.listdir(here) if n.endswith(".conf") and not n.startswith(".")
@@ -600,6 +658,13 @@ for key, values in want.items():
             differ = sorted(k for k in set(w) | set(h) if w.get(k) != h.get(k))
             if differ:
                 bad.append(f"Environment differs from the repo's in {differ}")
+        elif key in ADDRESSES:          # not printed: one of them is this machine's (host_address)
+            if addresses(values) != set(one(key).split()):
+                bad.append(f"{key}: the loaded addresses are not the ones the repo's files and this machine's drop-in give")
+        elif key in LISTEN:
+            got, exp = sorted(have.get("Listen", [])), sorted(f"{v} ({LISTEN[key]})" for v in values)
+            if got != exp:
+                bad.append(f"{key}: the loaded socket is {got or 'none'}, the repo says {exp}")
         elif key in SPANS or key in SIZES:
             if not same_value(key, values[-1], one(SPANS.get(key, key))):
                 bad.append(f"{key} is {one(SPANS.get(key, key))!r}, the repo says {values[-1]!r}")
@@ -652,6 +717,7 @@ for n in notes:
     print(f"note   {n}")
 if not bad and not elsewhere:
     what = "file" if not dropins else "drop-ins" if path == "-" else "file and drop-ins"
+    what += " and this machine's drop-in" if host_dropin else ""
     force = f"; its cgroup holds its {', '.join(limits)}" if limits and cgroup is not None else ""
     print(f"ok     {unit} (loaded: as the repo's {what}, {len(want)} settings{force})")
 sys.exit(1 if bad or elsewhere else 0)

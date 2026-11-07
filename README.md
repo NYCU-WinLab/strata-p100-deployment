@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-31.
 
-This repository holds the configuration, operations scripts and measurements of a production deployment of [Strata](https://github.com/Niko1221/Strata), an LLM inference engine. The service runs ISTA-DASLab's GSQ-RCO IQ3_S quantization of Qwen3.8-Flash-Next, a mixture-of-experts (MoE) model, on four NVIDIA Tesla P100 16 GB GPUs (Pascal, sm_60), in a VMware VM with a ZFS root file system. It offers OpenAI-compatible and Anthropic-compatible APIs on `127.0.0.1:8080` to the members of one lab.
+This repository holds the configuration, operations scripts and measurements of a production deployment of [Strata](https://github.com/Niko1221/Strata), an LLM inference engine. The service runs ISTA-DASLab's GSQ-RCO IQ3_S quantization of Qwen3.8-Flash-Next, a mixture-of-experts (MoE) model, on four NVIDIA Tesla P100 16 GB GPUs (Pascal, sm_60), in a VMware VM with a ZFS root file system. It offers OpenAI-compatible and Anthropic-compatible APIs on `127.0.0.1:8080`, which the members of one lab reach through their LLM gateway ([decision 0008](docs/decisions/0008-gateway-through-a-forwarder-on-the-overlay.md)).
 
 The engine splits the model's 48 layers over the four cards, and each token passes them in turn. 98% of the experts fit in the cards' memory. The other experts, the per-layer embedding table and the parked conversations are in RAM.
 
@@ -43,7 +43,8 @@ On Strata 0.1.45, deployed on 2026-10-19:
 
 | Item | Details |
 |---|---|
-| Service | `strata-q3.service`, 4 slots, 32K context each, no API key set |
+| Service | `strata-q3.service`, 4 slots, 32K context each, an API key set |
+| Access | `127.0.0.1:8080`, and `strata-gateway-proxy.socket` for the lab's LLM gateway, on the overlay network's interface only ([decision 0008](docs/decisions/0008-gateway-through-a-forwarder-on-the-overlay.md)) |
 | Engine | Strata 0.1.45 (commit `477ac13cb`) in `~/dev/strata`, built with CUDA 12.9 for `sm_60` only, with `STRATA_MMQ_GROUP_SORT=1` and `STRATA_PIPED_CONCURRENT=1` ([decision 0005](docs/decisions/0005-strata-0.1.45-group-sort-concurrent-read.md)) |
 | Model | ISTA-DASLab's Qwen3.8-Flash-Next GSQ-RCO IQ3_S (revision `ed59f92`), since 2026-10-20 ([decision 0004](docs/decisions/0004-iq3-s.md)); IQ3_XXS before |
 | Configuration | Output of `tools/configure_strata_q3.py --profile deployed --model iq3_s`, SHA-256 `e3e5a7b4…` |
@@ -81,14 +82,14 @@ sudo systemctl restart strata-q3   # the service is ready after about 9 minutes 
 | Document | Contents |
 |---|---|
 | [Daily operations](docs/runbooks/operations.md) | Status, start and stop, logs, test requests, recovery from the failed state, preparation for long tests, rerunning the benchmarks |
-| [Changing the configuration](docs/runbooks/change-config.md) | Changing Strata parameters, systemd units or the watchdog |
+| [Changing the configuration](docs/runbooks/change-config.md) | Changing Strata parameters, systemd units or the watchdog, and letting the gateway in |
 | [Deploying a commit from GitHub](docs/runbooks/deploy.md) | Bringing this checkout up to a newer `main` whose `test` workflow passed |
 | [Rebuilding the deployment from scratch](docs/runbooks/rebuild.md) | CUDA 12.9.1, the Strata 0.1.45 tree, setup, the engine build, IQ3_S's files and pack, the config, the systemd install and the engine screen on a new VM, and which steps the rehearsal of 2026-10-30 checked |
 | [Evaluating and upgrading Strata](docs/runbooks/upgrade-strata.md) | Building a new release and comparing it with the deployed one |
 | [System changes and how to undo them](docs/reference/system-changes.md) | Everything the deployment changed outside the repository |
 | [Deployment record](docs/deployment-record.md) | The evidence for each setting, measured results, known limits and the test method |
 | [Engine experiments](docs/engine-experiments.md) | Plans, criteria and results of the screens of engine switches and changes on 0.1.45, with IQ3_XXS and IQ3_S |
-| [Decision records](docs/decisions/) | [0001: keep this repository separate from Strata](docs/decisions/0001-keep-ops-repo-separate-from-strata.md); [0002: repository layout](docs/decisions/0002-repository-layout.md); [0003: CI on GitHub, deployment pulled by this machine](docs/decisions/0003-ci-on-github-deploy-by-pull.md); [0004: IQ3_S, 6 GiB RAM floors and a 2 GiB ARC](docs/decisions/0004-iq3-s.md); [0005: Strata 0.1.45 with its grouped prompt sort and concurrent prompt reads](docs/decisions/0005-strata-0.1.45-group-sort-concurrent-read.md); [0006: the stub harnesses run in CI, and commits that change the checks are deployed by hand](docs/decisions/0006-harnesses-in-ci-checks-by-hand.md); [0007: the maintainer's account may use at most 6 GiB of RAM and no swap](docs/decisions/0007-memory-limit-of-the-maintainers-account.md) |
+| [Decision records](docs/decisions/) | [0001: keep this repository separate from Strata](docs/decisions/0001-keep-ops-repo-separate-from-strata.md); [0002: repository layout](docs/decisions/0002-repository-layout.md); [0003: CI on GitHub, deployment pulled by this machine](docs/decisions/0003-ci-on-github-deploy-by-pull.md); [0004: IQ3_S, 6 GiB RAM floors and a 2 GiB ARC](docs/decisions/0004-iq3-s.md); [0005: Strata 0.1.45 with its grouped prompt sort and concurrent prompt reads](docs/decisions/0005-strata-0.1.45-group-sort-concurrent-read.md); [0006: the stub harnesses run in CI, and commits that change the checks are deployed by hand](docs/decisions/0006-harnesses-in-ci-checks-by-hand.md); [0007: the maintainer's account may use at most 6 GiB of RAM and no swap](docs/decisions/0007-memory-limit-of-the-maintainers-account.md); [0008: the LLM gateway reaches the service through a forwarder on the overlay network](docs/decisions/0008-gateway-through-a-forwarder-on-the-overlay.md) |
 | Upstream posts | [Comment on issue #2281](docs/upstream/issue-2281-comment.md); [PR #2918](docs/upstream/pr-2918.md), [its comment](docs/upstream/pr-2918-comment.md) and [the reply on its rebase](docs/upstream/pr-2918-rebase-comment.md) onto main `9ae93f7` (0.2.1 with the 0.1.46.1 hotfix); bug reports [#2990](docs/upstream/issue-2990.md) (`sycl/tools/build.sh` exit status) and [#2991](docs/upstream/issue-2991.md) (`ple_reader_selftest` temp files). Upstream closed the PR and both issues in its tracker reset for 0.2.0-beta; they were reopened after a re-test on 0.2.0-beta |
 | [Test results](results/README.md) | Index of the raw output files and the commands that regenerate the summaries |
 | [Changelog](CHANGELOG.md) | Changes by date |

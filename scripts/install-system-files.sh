@@ -6,7 +6,9 @@
 # Nothing is restarted: a changed strata-q3.service takes effect at its next start.
 # Usage: scripts/install-system-files.sh [--dry-run] [--enable]
 #   --enable   also enable zfs-arc-max.service (now), strata-q3.service and strata-q3-health.timer: a fresh machine
-#              (docs/runbooks/rebuild.md)
+#              (docs/runbooks/rebuild.md).  It leaves strata-gateway-proxy.socket alone: that refuses every address
+#              until this machine has the gateway's, in a drop-in that is not in the repo
+#              (docs/runbooks/change-config.md#let-the-gateway-in)
 set -u -o pipefail
 D=$(cd "$(dirname "$0")/.." && pwd)
 DRY=0; ENABLE=0
@@ -22,7 +24,8 @@ put() {   # source target mode
   run sudo install -o root -g root -m "$3" "$1" "$2"
   case $2 in /etc/systemd/system/*) reload=1 ;; esac
 }
-for u in strata-q3.service strata-q3-health.service strata-q3-health.timer zfs-arc-max.service; do
+for u in strata-q3.service strata-q3-health.service strata-q3-health.timer zfs-arc-max.service \
+         strata-gateway-proxy.socket strata-gateway-proxy.service; do
   put "$D/systemd/$u" "/etc/systemd/system/$u" 0644
 done
 for f in "$D"/systemd/*.d/*.conf; do

@@ -2,6 +2,17 @@
 
 Notable changes to this machine and this repository, newest first. There are no version numbers; sections are by date. The categories follow [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/).
 
+## 2026-11-08
+
+### Added
+
+- The lab's LLM gateway can reach the service ([decision 0008](docs/decisions/0008-gateway-through-a-forwarder-on-the-overlay.md)). `systemd/strata-gateway-proxy.socket` listens on port 8000 of the overlay network's interface alone, the one port that the overlay's access policy lets the gateway reach, so nothing listens on the machine's own network. `systemd/strata-gateway-proxy.service` passes the connections on to `127.0.0.1:8080` with `systemd-socket-proxyd`, as a dynamic user that can reach loopback only. The socket refuses every address but the gateway's, which is in a drop-in that only this machine has. [Let the gateway in](docs/runbooks/change-config.md#let-the-gateway-in) gives the steps. `scripts/install-system-files.sh` installs both units, and its `--enable` does not enable the socket.
+- `scripts/check-drift.sh` compares the two units with what systemd loaded, and it knows their settings: the address lists, the listening socket, the device and the keepalive. This machine's `10-gateway-address.conf` is the one drop-in that the repo has no copy of, of that one unit: it must be there, be root's, set `IPAddressAllow=` to one host's address and nothing else, and be what systemd loaded. The check does not print the address. `scripts/check-deployment.sh` reports a socket that is not active and enabled.
+
+### Changed
+
+- The service has an API key, one for the gateway and one for local use, in `"api_key"` of the live config, which is now mode 0600. A client on this machine must send one: without it, `/v1/*` answers 401. `/health` needs none. The test request in [Daily operations](docs/runbooks/operations.md#send-a-test-request) sends the local key.
+
 ## 2026-10-31
 
 ### Added

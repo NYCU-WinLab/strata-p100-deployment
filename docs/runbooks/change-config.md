@@ -83,3 +83,27 @@ Then run `sudo systemctl restart strata-q3`.
 3. Run `scripts/test.sh`, commit, and run `scripts/check-drift.sh`, as in step 5 of [Steps](#steps).
 
 A change to `strata-q3.service` takes effect at the next start. Until then, `scripts/check-drift.sh` reports a changed `Environment=` as `restart pending`.
+
+## Let the gateway in
+
+`strata-gateway-proxy.socket` refuses every address until this machine has the gateway's ([decision 0008](../decisions/0008-gateway-through-a-forwarder-on-the-overlay.md)). The address stays out of this public repository, in a drop-in that only this machine has. `scripts/check-drift.sh` reads the drop-in and does not print the address. Do not paste it into `results/` or into a commit.
+
+1. Check that the live config has the gateway's key (section 5 of the [deployment record](../deployment-record.md#5-known-limits-to-share-with-lab-members)), and install the units with `scripts/install-system-files.sh`.
+2. Start the socket as the repo gives it:
+   ```bash
+   sudo systemctl enable --now strata-gateway-proxy.socket
+   ```
+   It says that the unit `is added as a dependency to a non-existent unit`: a device has no unit file, and this is expected.
+   Then, from the gateway, connect to port 8000 of this machine's overlay address. Expected: the connection times out. This shows that the address list is in force: systemd only warns when it cannot apply one.
+3. Write the drop-in, with the gateway's overlay address for `<address>`:
+   ```bash
+   sudo install -d -o root -g root -m 0755 /etc/systemd/system/strata-gateway-proxy.socket.d
+   printf '[Socket]\nIPAddressAllow=%s/32\n' '<address>' |
+     sudo install -o root -g root -m 0644 /dev/stdin /etc/systemd/system/strata-gateway-proxy.socket.d/10-gateway-address.conf
+   sudo systemctl daemon-reload
+   sudo systemctl restart strata-gateway-proxy.socket
+   ```
+4. From the gateway, request `/v1/models` on port 8000 of this machine's overlay address, with the key. Expected: the model's name. Without the key: 401.
+5. Run `scripts/check-drift.sh`, which must report `no drift`, and `STRATA_KEY=<key> scripts/check-deployment.sh`.
+
+To change the address, repeat step 3. To cut the gateway off, run `sudo systemctl stop strata-gateway-proxy.socket`: the connections through the forwarder end, and the service keeps running. `sudo systemctl start strata-gateway-proxy.socket` lets it in again.

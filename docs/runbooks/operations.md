@@ -38,8 +38,11 @@ When the service is healthy, the watchdog writes no records, and `-u strata-q3-h
 
 ```bash
 curl -N http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/json' \
+  -H @<(printf 'Authorization: Bearer %s\n' "$(cat ~/.config/strata/local-api-key)") \
   --data-binary @examples/requests/request-normal.json
 ```
+
+The service has an API key, and the header file keeps it off the command line, which every account can read in `/proc`.
 
 Expected: every example request sets `"stream": true`, so the response is a series of `data: {…"choices"…}` lines (possibly with `: keep-alive` lines between them), and the last line is `data: [DONE]`. `request-fast.json` sets `max_tokens` to 2048, so long answers are cut off (deployment record, section 5).
 

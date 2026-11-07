@@ -1,0 +1,25 @@
+[Unit]
+Description=Strata: the LLM gateway's way in, on the overlay network's interface only (decision 0008)
+# The overlay's client deletes wt0 and makes it again when it restarts, and a socket stays bound to the index of the
+# device that is gone: BindsTo= stops this unit with the device, and WantedBy= below starts it with the new one
+BindsTo=sys-subsystem-net-devices-wt0.device
+After=sys-subsystem-net-devices-wt0.device
+
+[Socket]
+# Port 8000 is the one port of this machine that the overlay's access policy lets the gateway reach.  IPv4 only: the
+# gateway calls this machine's IPv4 address on the overlay
+ListenStream=0.0.0.0:8000
+# Only what arrives on the overlay's interface: nothing listens on the machine's own network
+BindToDevice=wt0
+# systemd-socket-proxyd has no timeouts, and a connection counts against its --connections-max until it ends: a peer
+# that vanishes with the overlay is found within 2 minutes (60 s, then 4 probes 15 s apart), and its place is free again
+KeepAlive=yes
+KeepAliveTimeSec=60
+KeepAliveIntervalSec=15
+KeepAliveProbes=4
+# Closed to every address.  The gateway's, which this public repository does not hold, is in this machine's own
+# drop-in, /etc/systemd/system/strata-gateway-proxy.socket.d/10-gateway-address.conf: IPAddressAllow= wins over this
+IPAddressDeny=any
+
+[Install]
+WantedBy=sys-subsystem-net-devices-wt0.device

@@ -1,0 +1,20 @@
+[Unit]
+Description=Strata: pass the LLM gateway's connections on to the service on 127.0.0.1:8080 (decision 0008)
+Requires=strata-gateway-proxy.socket
+After=strata-gateway-proxy.socket
+
+[Service]
+# 8: the service has 4 slots; the others are for the gateway's model checks and for connections that are closing.  It
+# has no dependency on strata-q3.service, which it never starts or stops: while that is down, a connection just ends
+ExecStart=/lib/systemd/systemd-socket-proxyd --connections-max=8 127.0.0.1:8080
+# A user of its own for each run.  This implies ProtectSystem=strict, ProtectHome=read-only, PrivateTmp=yes and
+# NoNewPrivileges=yes; it needs no file and no capability
+DynamicUser=yes
+CapabilityBoundingSet=
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# What the socket unit allows covers the sockets it passes on, not those this process opens: these reach loopback only
+IPAddressAllow=localhost
+IPAddressDeny=any
